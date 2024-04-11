@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+    <system>
+        <tab id="learningmagento" translate="label" sortOrder="15">
+            <label>learning Magento</label>
+        </tab>
+        <section id="learning_magento_order" translate="label" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
+            <label>Order Generation via API</label>
+            <tab>learningmagento</tab>
+            <resource>Learningmagento_Ordergeneration::default_config</resource>
+            <group id="general_settings" translate="label" type="text" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>General Settings</label>
+                <field id="default_store" translate="label" type="select" sortOrder="15" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Default Store</label>
+                    <source_model>Learningmagento\Ordergeneration\Model\Config\Stores</source_model>
+                </field>
+            </group>
+        </section>
+    </system>
+</config>
