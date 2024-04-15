@@ -4,7 +4,7 @@
  *
  * @category  Custom Development
  * @email     contactus@learningmagento.com
- * @author    Avesh Naik
+ * @author    Learning Magento
  * @website   learningmagento.com
  * @Date      03-04-2024
  */
@@ -13,7 +13,7 @@ namespace Learningmagento\Ordergeneration\Model;
 
 use Learningmagento\Ordergeneration\Api\CreateOrderInterface;
 use Magento\Framework\Exception\LocalizedException;
-use Magento\CatalogInventory\Model\Stock\StockItemRepository;
+use Magento\InventorySalesAdminUi\Model\GetSalableQuantityDataBySku;
 
 class CreateOrder implements CreateOrderInterface
 {
@@ -24,9 +24,17 @@ class CreateOrder implements CreateOrderInterface
 
     protected $productFactory;
 
-    protected $stockItemRepository;
+    protected $salableQty;
 
     protected $regionCollection;
+
+    protected $configuration;
+
+    protected $messager;
+
+    protected $invoiceService;
+
+    protected $transaction;
 
     public function __construct(
         \Magento\Quote\Api\CartManagementInterface $cartManagementInterface,
@@ -34,16 +42,30 @@ class CreateOrder implements CreateOrderInterface
         \Magento\Store\Model\StoreManagerInterface $storeManager,
         \Magento\Catalog\Model\ProductFactory $productFactory,
         \Magento\Directory\Model\ResourceModel\Region\CollectionFactory $regionCollection,
-        StockItemRepository  $stockItemRepository
+        \Learningmagento\Ordergeneration\Helper\Configuration $configuration,
+        \Magento\Framework\Message\ManagerInterface $messager,
+        \Magento\Sales\Model\Service\InvoiceService $invoiceService,
+        \Magento\Framework\DB\Transaction $transaction,
+        GetSalableQuantityDataBySku  $salableQty
     ) {
         $this->cartManagementInterface = $cartManagementInterface;
         $this->cartRepositoryInterface = $cartRepositoryInterface;
         $this->storeManager = $storeManager;
         $this->productFactory = $productFactory;
         $this->regionCollection = $regionCollection;
-        $this->stockItemRepository = $stockItemRepository;
+        $this->configuration = $configuration;
+        $this->messager = $messager;
+        $this->invoiceService = $invoiceService;
+        $this->transection = $transaction;
+        $this->salableQty = $salableQty;
     }
 
+    /**
+     * This method generate a fresh order
+     *
+     * @param $orderData
+     * @return mixed
+     */
     public function generateOrder($order)
     {
         try {
@@ -54,9 +76,9 @@ class CreateOrder implements CreateOrderInterface
             $cart->setCurrency();
             // Setting a customer data
             $cart->setCustomerId(null);
-            $cart->setCustomerEmail($orderData['email']);
-            $cart->setCustomerFirstname($orderData['name']['firstname']);
-            $cart->setCustomerLastname($orderData['name']['lastname']);
+            $cart->setCustomerEmail($order['email']);
+            $cart->setCustomerFirstname($order['name']['firstname']);
+            $cart->setCustomerLastname($order['name']['lastname']);
             $cart->setCustomerIsGuest(true);
             $cart->setCustomerGroupId(\Magento\Customer\Api\Data\GroupInterface::NOT_LOGGED_IN_ID);
             if (!isset($order['order_items']) && empty($order['order_items'])) {
@@ -73,10 +95,8 @@ class CreateOrder implements CreateOrderInterface
                     }
                     if (isset($product) && !empty($product)) {
                         if ($product->getStatus() == '1') {
-                            $stock = $this->stockItemRepository->get($product->getId());
-                            $stockStatus = ($stock->getQty() > 0) ? ($stock->getIsInStock() == '1' ?
-                                ($stock->getQty() >= $qty ? true : false)
-                                : false) : false;
+                            $stock = $this->salableQty->execute($item['sku']);
+                            $stockStatus = ($stock[0]['qty'] > 0 && $stock[0]['qty'] >= $qty) ? true : false;
                             if ($stockStatus) {
                                 $product->setSkipSaleableCheck(true);
                                 $product->setData('is_salable', true);
@@ -97,6 +117,7 @@ class CreateOrder implements CreateOrderInterface
                     $reason[] = $item['sku'] ." SKU key not exist in payload";
                 }
             }
+
             if(count($reason)>0) {
                 $txt = "";
                 foreach ($reason as $rr) {
@@ -110,17 +131,18 @@ class CreateOrder implements CreateOrderInterface
                 ->addFieldToFilter("code", ["eq" => $order['shipping']['state']])
                 ->getFirstItem();
 
+
+
             $shipAddress = [
                 'firstname' => $order['shipping']['firstname'],
                 'lastname' => $order['shipping']['lastname'],
-                'street' => $order['shipping']['address_line'],
+                'street' => $order['shipping']['street'],
                 'city' => $order['shipping']['city'],
-                'country' => $order['shipping']['country_code'],
                 'region_id' => $shippingRegion->getId(),
                 'country_id' => $order['shipping']['country_code'],
                 'region' => $shippingRegion->getData("default_name"),
                 'postcode' => $order['shipping']['postcode'],
-                'telephone' => $order['shipping']['phone_number'],
+                'telephone' => $order['shipping']['telephone'],
                 'fax' => '',
                 'save_in_address_book' => 1
             ];
@@ -129,32 +151,35 @@ class CreateOrder implements CreateOrderInterface
                 ->addFieldToFilter("code", ["eq" => $order['billing']['state']])
                 ->getFirstItem();
 
+
             $billAddress = [
                 'firstname' => $order['billing']['firstname'],
                 'lastname' => $order['billing']['lastname'],
-                'street' => $order['billing']['address_line'],
+                'street' => $order['billing']['street'],
                 'city' => $order['billing']['city'],
-                'country' => $order['billing']['country_code'],
-                'country_id' => $order['billing']['country_code'],,
+                'country_id' => $order['billing']['country_code'],
                 'region_id' => $billingRegion->getId(),
                 'region' => $billingRegion->getData("default_name"),
                 'postcode' => $order['billing']['postcode'],
-                'telephone' => $order['billing']['phone_number'],
+                'telephone' => $order['billing']['telephone'],
                 'fax' => '',
                 'save_in_address_book' => 1
             ];
             $cart->getBillingAddress()->addData($billAddress);
-            $shippingAddress = $cart->getShippingAddress()->addData($shipAddress);
+            $cart->getShippingAddress()->addData($shipAddress);
+            $shippingAddress = $cart->getShippingAddress();
 
-            $shippingAddress->setCollectShippingRates(true)->collectShippingRates()
-                ->setShippingMethod(\Ced\Mysale\Model\Carrier\Mysale::SHIPPING_METHOD);
-            $cart->setPaymentMethod(\Ced\Mysale\Model\Payment\Mysale::PAYMENT_METHOD_CODE);
+            $shippingAddress->setCollectShippingRates(true)
+                ->collectShippingRates()
+                ->setShippingMethod(\Learningmagento\CustomShipping\Model\Carrier\Storeship::ORDER_CODE);
+
+            $cart->setPaymentMethod(\Learningmagento\CustomPayment\Model\PaymentMethod::CODE);
 
             $cart->setInventoryProcessed(false);
             $cart->save();
             $cart->getPayment()->importData(
                 [
-                    'method' => \Ced\Mysale\Model\Payment\Mysale::PAYMENT_METHOD_CODE
+                    'method' => \Learningmagento\CustomPayment\Model\PaymentMethod::CODE
                 ]
             );
 
@@ -170,7 +195,7 @@ class CreateOrder implements CreateOrderInterface
                 /** @var \Magento\Sales\Model\Order $magentoOrder */
                 $magentoOrder = $this->cartManagementInterface->submit($cart);
             } catch (\Exception $e) {
-
+                $this->messager->addErrorMessage($e->getMessage());
             }
             if (isset($magentoOrder) && !empty($magentoOrder)) {
 
@@ -178,15 +203,12 @@ class CreateOrder implements CreateOrderInterface
                     ->setState(\Magento\Sales\Model\Order::STATE_PROCESSING);
                 $magentoOrder->save();
 
-                // Invoice Creation
-                if ($this->config->getAutoInvoice()) {
-                    $this->generateInvoice($magentoOrder);
-                }
+                $this->generateInvoice($magentoOrder);
             }
 
         }
         catch (\Exception $exception) {
-
+            $this->messager->addErrorMessage($exception->getMessage());
         }
     }
 
@@ -213,18 +235,12 @@ class CreateOrder implements CreateOrderInterface
                 ->setIsCustomerNotified(true)->save();
             $order->setStatus('processing')->save();
         } catch (\Exception $exception) {
-            $this->logger->addCritical(
-                'Something went wrong while creating an invoice',
-                [
-                    'marketplace' => 'Mysale',
-                    'api_data' => ['error' => $exception->getMessage()],
-                ]
-            );
+            $this->messager->addErrorMessage($exception->getMessage());
         }
     }
 
     protected function getSelectedStore()
     {
-        //return
+        return $this->configuration->getOrderGenerationConfig("default_store");
     }
 }

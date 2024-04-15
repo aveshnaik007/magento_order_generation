@@ -11,7 +11,16 @@
 
 namespace Learningmagento\Ordergeneration\Api;
 
+/**
+ * Interface to generate an order
+ */
 interface CreateOrderInterface
 {
+    /**
+     * This method generate a fresh order
+     *
+     * @param array $orderData
+     * @return mixed
+     */
     public function generateOrder($orderData);
 }
